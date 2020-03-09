@@ -1,0 +1,118 @@
+---
+title: "Machine Learning Homework 6- Huynh Hoang Trung Nghia"
+author: "Huynh Hoang Trung Nghia"
+date: "3/9/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+```
+
+## Data loading and partition
+
+```{r}
+#Loading and Clean data
+data <- read.csv("train.csv")
+data[c("Age")] <- imputeMissings::impute(data[c("Age")])
+data$Embarked[c(62,830)] <- "S"
+data$Partner <- apply(data[c("SibSp","Parch")],1,function(a) !(a[1] == 0 & a[2] == 0))
+data$Below10 <- apply(data[c("Age")],1,function(a) a <= 10)
+data <- select(data,Survived, Pclass, Sex,Partner,Below10, Fare, Embarked)
+for (i in c("Survived", "Pclass", "Partner","Below10")) {
+  data[,i] <- as.factor(data[,i])
+}
+
+#data partition
+index <- sample(c(1,2),nrow(data), replace = T,prob = c(0.8,0.2))
+train <- data[index == 1,]
+test <- data[index == 2,]
+```
+
+
+## NaiveBayes and test function
+```{r}
+#NaiveBayes 
+NaiveBayes <- function(data, class, predictor = "all"){
+  library(dplyr)
+  if(predictor == "all"){
+    pred <- select(data, -class)
+  } else {
+    pred <- select(data, predictor)
+  }
+  if(is.factor(data[,class]) == FALSE ) stop("the independent variable must be categorical variable")
+  ycount <- xtabs(~ data[,class])
+  mod <- list("Target" = class, 
+              "levels" = levels(data[,class]), 
+              "py"= table(data[,class])/nrow(data)
+              )
+  j <- 4
+  for(i in names(pred)){
+    if (is.factor(pred[,i])== TRUE) {
+      px <- t(apply(xtabs(~setNames(pred[,i],i) + setNames(data[,class],class)),1,function(a) a/ycount))
+      px <- cbind(px, c(table(data[,i])/nrow(data)))
+    } else if(is.factor(pred[,i])== FALSE){
+      px <- data %>% group_by_(.dots = class) %>% summarise_(
+        setNames(paste0("mean(",i,")"),"mean"),
+        setNames(paste0("sd(",i,")"),"sd"))
+      px <- rbind(px,c("all", mean(pred[,i]),sd(pred[,i])))
+    } else {
+      stop("one of the predictors is not categorical or continuous variables")
+    }
+    mod[j] <- list(px)
+    names(mod)[j] <- i
+    j <- j+1
+  }
+  return(mod)
+}
+
+#Test function
+test_Naive <- function(model, new_data, prob = FALSE, thread = 0.5){
+  class <- model$Target
+  prediction <- c()
+  if(sum(is.na(test)) != 0) stop("There are missing values in The Test Set")
+  test <- select(new_data, - class)
+  first_lev <- model$levels[1]
+  for(j in 1:nrow(new_data)){
+    p.x_y <- 1
+    p.x <- 1
+    for(i in names(test)){
+      x <- test[j,i]
+      if (is.factor(test[,i])== TRUE) {
+        p.x_i <- model[[i]][x,3]
+        p.x_y_i <- model[[i]][x,first_lev]
+      } else if(is.factor(test[,i])== FALSE){
+        p.x_i <- dnorm(x, mean = as.numeric(model[[i]][is.na(model[[i]][class]),2]), 
+                       sd = as.numeric(model[[i]][is.na(model[[i]][class]),3]))
+        p.x_y_i <- dnorm(x, mean = as.numeric(model[[i]][model[[i]][class] == first_lev,2][1,1]), 
+                         sd = as.numeric(model[[i]][model[[i]][class] == first_lev,3][1,1]))
+      } else {
+        stop("one of the predictors is not categorical or continuous variables")
+      }
+      p.x_y <- p.x_y*p.x_y_i
+      p.x <- p.x*p.x_i
+    }
+    prediction[j] <- (p.x_y*model$py[first_lev])/p.x
+  }
+  result <- sapply(prediction, function(a) ifelse(a > thread, a <- first_lev, a <- model$levels[2]))
+  ifelse(prob == TRUE,return(prediction ),return(result))
+}
+```
+
+#fit and predict the data to the NaiveBayes model
+```{r,warning=FALSE}
+#fit
+NaiMod <- NaiveBayes(data = train,class = "Survived")
+NaiMod
+
+#predition
+result <- test_Naive(model = NaiMod, new_data = test)
+result
+
+#accuracy
+sum(result == test$Survived,na.rm = T)/nrow(test)
+```
